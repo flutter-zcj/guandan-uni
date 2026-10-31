@@ -23,17 +23,19 @@ const SEAT_NAME = ['我', '西家', '北家', '东家'];
 
 /* 各家出牌落点 */
 const OUT_POS = [
-  { x: 640, y: 452 },
+  { x: 640, y: 430 },
   { x: 286, y: 320 },
   { x: 640, y: 214 },
   { x: 994, y: 320 }
 ];
 
-const HAND_SCALE = 0.86;
-const SMALL_SCALE = 0.38;
+/* 手牌大牌（原版 bigCards 142x194，原尺寸显示） */
+const HAND_Y = 622;          // 大牌中心 y：底边贴近屏幕底部
 const HAND_GAP_MAX = 42;
-const HAND_GAP_MIN = 17;
-const HAND_Y = 656;
+const HAND_GAP_MIN = 16;
+const HAND_UP = 26;          // 选中上移
+/* 他家牌背（原版 smallCards 42x57） */
+const BACK_W = 42, BACK_H = 57;
 
 export default class GuandanScene extends Phaser.Scene {
   constructor() {
@@ -41,6 +43,11 @@ export default class GuandanScene extends Phaser.Scene {
   }
 
   /* ---------------- 生命周期 ---------------- */
+
+  preload() {
+    // 加载掼蛋原版美术资源（牌面 / 牌背 / 按钮 / LOGO / 徽标）
+    TEX.preloadAssets(this);
+  }
 
   create() {
     this.table = new GameTable(Date.now() % 1000000);
@@ -51,21 +58,19 @@ export default class GuandanScene extends Phaser.Scene {
     this.busy = false;
     this.outShow = [null, null, null, null];   // 各家最近一次出牌
     this._dbg = { Rule, HintFinder, CardLib };  // 调试/自动化测试用
-    this.lastRenderedLevel = -1;
+    this.level = this.table.levelOf(0);
     this.settle = null;
     this.panel = null;
 
     this.buildTextures();
     this.add.image(0, 0, 'table_bg').setOrigin(0, 0);
+    // 桌面中央 LOGO（原版 zhuomianlog，半透明水印）
+    this.add.image(640, 306, 'ui_logo').setAlpha(0.30).setDepth(0);
     this.buildTopBar();
     this.buildSeats();
     this.buildInfo();
     this.buildButtons();
 
-    if (this.lastRenderedLevel !== this.table.levelOf(0)) {
-      this.level = this.table.levelOf(0);
-      this.refreshCardTextures();
-    }
     this.newRound();
   }
 
@@ -73,20 +78,9 @@ export default class GuandanScene extends Phaser.Scene {
     TEX.buildTableTexture(this, W, H);
     TEX.buildAvatarTexture(this, 'avatar', 80, '#c9a86a');
     TEX.buildAvatarTexture(this, 'avatar_cur', 80, '#ffd76a');
-    TEX.buildBadgeTexture(this, 'badge_team', 44, 24, '#2f8f5b', '队友');
-    TEX.buildBadgeTexture(this, 'b_rank1', 74, 26, '#c8801a', '头游');
-    TEX.buildBadgeTexture(this, 'b_rank2', 74, 26, '#4a7ab5', '二游');
+    TEX.buildBadgeTexture(this, 'b_rank2', 74, 26, '#3879a8', '二游');
     TEX.buildBadgeTexture(this, 'b_rank3', 74, 26, '#7a7a7a', '三游');
-    TEX.buildBadgeTexture(this, 'b_rank4', 74, 26, '#8a5a2a', '末游');
-    TEX.buildButtonTextures(this, 'btn_hint', 130, 52, null, { kind: 'plain', label: '提 示' });
-    TEX.buildButtonTextures(this, 'btn_play', 130, 52, null, { kind: 'primary', label: '出 牌' });
-    TEX.buildButtonTextures(this, 'btn_pass', 130, 52, null, { kind: 'plain', label: '不 出' });
     TEX.buildButtonTextures(this, 'btn_again', 210, 60, null, { kind: 'primary', label: '再玩一局' });
-  }
-
-  refreshCardTextures() {
-    TEX.buildCardTextures(this, this.level);
-    this.lastRenderedLevel = this.level;
   }
 
   /* ---------------- 顶层信息条 ---------------- */
@@ -133,8 +127,8 @@ export default class GuandanScene extends Phaser.Scene {
       const lv = this.add.text(0, 72, '', {
         fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '16px', color: '#9fe6bf'
       }).setOrigin(0.5).setVisible(!isSelf);
-      const badge = this.add.image(0, 96, 'badge_team').setOrigin(0.5).setVisible(false);
-      const rank = this.add.image(52, -40, 'b_rank1').setOrigin(0.5).setVisible(!isSelf);
+      const badge = this.add.image(44, -44, 'ui_team1').setDisplaySize(40, 44).setOrigin(0.5).setVisible(false);
+      const rank = this.add.image(56, -48, 'ui_mark_first').setDisplaySize(40, 40).setOrigin(0.5).setVisible(!isSelf);
       c.add([ring, name, cnt, lv, badge, rank]);
       this.seatNodes.push({ box: c, ring, name, cnt, lv, badge, rank, handSprites: [], outSprites: [] });
     }
@@ -167,25 +161,46 @@ export default class GuandanScene extends Phaser.Scene {
   /* ---------------- 按钮 ---------------- */
 
   buildButtons() {
+    // 原版三色按钮（273x97 提取图），显示 180x64
+    const BW = 180, BH = 64, BY = 576;
     const mk = (key, x, y, cb) => {
-      const s = this.add.image(x, y, key + '_normal').setInteractive({ useHandCursor: true });
+      const s = this.add.image(x, y, key).setDisplaySize(BW, BH)
+        .setDepth(60).setInteractive({ useHandCursor: true });
+      const down = key + '_down';
       s.setEnabled = (on) => {
         s.enabled = on;
-        s.setTexture(on ? key + '_normal' : key + '_disabled');
+        s.setTexture(on ? key : down);
+        s.setAlpha(on ? 1 : 0.92);
       };
-      s.on('pointerdown', () => { if (s.enabled !== false) s.setTexture(key + '_pressed'); });
-      s.on('pointerout', () => { if (s.enabled !== false) s.setTexture(key + '_normal'); });
+      s.on('pointerdown', () => { if (s.enabled !== false) { s.setTexture(down); s.setTint(0xcccccc); } });
+      s.on('pointerout', () => { if (s.enabled !== false) { s.setTexture(key); s.clearTint(); } });
       s.on('pointerup', () => {
+        s.clearTint();
         if (s.enabled === false) return;
-        s.setTexture(key + '_normal');
+        s.setTexture(key);
         cb();
       });
       return s;
     };
-    this.btnHint = mk('btn_hint', 806, 566, () => this.onHint());
-    this.btnPlay = mk('btn_play', 954, 566, () => this.onPlay());
-    this.btnPass = mk('btn_pass', 1102, 566, () => this.onPass());
-    this.btnAgain = mk('btn_again', 640, 612, () => this.newRound()).setVisible(false);
+    this.btnHint = mk('ui_hint', 800, BY, () => this.onHint());
+    this.btnPlay = mk('ui_play', 990, BY, () => this.onPlay());
+    this.btnPass = mk('ui_pass', 1180, BY, () => this.onPass());
+
+    // 再玩一局：程序化三态按钮
+    const again = this.add.image(640, 612, 'btn_again_normal').setDisplaySize(210, 60)
+      .setDepth(60).setInteractive({ useHandCursor: true }).setVisible(false);
+    again.setEnabled = (on) => {
+      again.enabled = on;
+      again.setTexture(on ? 'btn_again_normal' : 'btn_again_disabled');
+    };
+    again.on('pointerdown', () => { if (again.enabled !== false) again.setTexture('btn_again_pressed'); });
+    again.on('pointerout', () => { if (again.enabled !== false) again.setTexture('btn_again_normal'); });
+    again.on('pointerup', () => {
+      if (again.enabled === false) return;
+      again.setTexture('btn_again_normal');
+      this.newRound();
+    });
+    this.btnAgain = again;
   }
 
   /* ---------------- 一局开始 ---------------- */
@@ -204,7 +219,6 @@ export default class GuandanScene extends Phaser.Scene {
     this.txtTip.setAlpha(0);
 
     this.level = this.table.levelOf(0);
-    if (this.lastRenderedLevel !== this.level) this.refreshCardTextures();
 
     this.renderAll();
     this.scheduleTurn();
@@ -229,7 +243,11 @@ export default class GuandanScene extends Phaser.Scene {
       node.ring.setTexture((t.currentSeat === i && t.step === 'play') ? 'avatar_cur' : 'avatar');
       node.badge.setVisible(i === 2);
       if (s.rank > 0) {
-        node.rank.setVisible(true).setTexture('b_rank' + s.rank);
+        // 头游/末游用原版徽标图，二游/三游用文字徽标
+        const key = s.rank === 1 ? 'ui_mark_first' : s.rank === 4 ? 'ui_mark_last' : 'b_rank' + s.rank;
+        node.rank.setVisible(true).setTexture(key);
+        if (s.rank === 2 || s.rank === 3) node.rank.setDisplaySize(74, 26);
+        else node.rank.setDisplaySize(40, 40);
         if (i === 0) node.rank.setPosition(-560, -40);
       } else node.rank.setVisible(false);
       this.renderHand(i);
@@ -254,39 +272,51 @@ export default class GuandanScene extends Phaser.Scene {
     const hand = this.table.seats[seat].hand;
 
     if (seat === 0) {
+      // 原版手牌：142x194 大牌 = 底版 + 数字贴片 + 小花色（级牌橙数字 / 逢人配金框）
       const n = hand.length;
-      const cw = TEX.CARD_W * HAND_SCALE;
-      const avail = W - 40;
+      const cw = TEX.BIG_W, chh = TEX.BIG_H;
+      const wildCard = Rule.levelHeartCard ? Rule.levelHeartCard(this.level) : 0;
+      const avail = W - 60;
       let gap = n > 1 ? Math.min(HAND_GAP_MAX, (avail - cw) / (n - 1)) : 0;
       if (gap < HAND_GAP_MIN) gap = HAND_GAP_MIN;
       const total = cw + gap * (n - 1);
       const startX = 640 - total / 2 + cw / 2;
       hand.forEach((card, i) => {
-        const spr = this.add.image(startX + i * gap, HAND_Y, TEX.cardKey(card));
-        spr.setDisplaySize(cw, TEX.CARD_H * HAND_SCALE);
-        spr.setDepth(i);
-        if (this.selected.has(i)) spr.y = HAND_Y - 22;
-        spr.setInteractive({ useHandCursor: true });
-        spr.on('pointerup', () => this.toggleCard(i));
-        node.handSprites.push(spr);
+        const cont = this.add.container(startX + i * gap, HAND_Y);
+        cont.setDepth(10 + i);
+        const base = this.add.image(0, 0, TEX.bigKey(card));
+        cont.add(base);
+        if (card < 53) {
+          const rank = CardLib.num(card);                 // 14=A .. 13=K
+          const suit = CardLib.suitOf(card);              // 1方 2梅 3红 4黑
+          const isLevel = rank === this.level;
+          const colorTag = isLevel ? 'orange' : (suit === 1 || suit === 3) ? 'red' : 'black';
+          cont.add(this.add.image(-63, -91, 'p_num_' + colorTag + '_' + rank).setOrigin(0));
+          cont.add(this.add.image(-63, -45, TEX.suitKey(suit)).setOrigin(0));
+        }
+        if (card === wildCard) cont.add(this.add.image(0, 0, 'p_glow'));  // 逢人配金框
+        if (this.selected.has(i)) cont.y = HAND_Y - HAND_UP;
+        base.setInteractive({ useHandCursor: true });
+        base.on('pointerup', () => this.toggleCard(i));
+        cont.cardIndex = i;
+        node.handSprites.push(cont);
       });
     } else {
-      const cw = TEX.CARD_W * SMALL_SCALE;
-      const chh = TEX.CARD_H * SMALL_SCALE;
-      const gap = seat === 2 ? 12 : 6;              // 左右家纵向牌背更密，避免压头像/按钮
+      // 他家手牌：原版 smallCards 牌背 42x57
+      const gap = seat === 2 ? 12 : 6;
       const n = hand.length;
       const p = SEAT_POS[seat];
       hand.forEach((card, i) => {
         let spr;
         if (seat === 1 || seat === 3) {
           const total = (n - 1) * gap;
-          spr = this.add.image(p.x, p.y + 168 - total / 2 + i * gap, 'card_back');
+          spr = this.add.image(p.x, p.y + 168 - total / 2 + i * gap, 'p_back');
           spr.setAngle(seat === 1 ? 90 : -90);
         } else {
           const total = (n - 1) * gap;
-          spr = this.add.image(p.x - total / 2 + i * gap, p.y + 96, 'card_back');
+          spr = this.add.image(p.x - total / 2 + i * gap, p.y + 96, 'p_back');
         }
-        spr.setDisplaySize(cw, chh);
+        spr.setDisplaySize(BACK_W, BACK_H);
         node.handSprites.push(spr);
       });
     }
@@ -299,15 +329,18 @@ export default class GuandanScene extends Phaser.Scene {
     const o = this.outShow[seat];
     if (!o) return;
     const p = OUT_POS[seat];
-    const scale = 0.6;
-    const gap = 20;
+    // 我方出牌用原版出牌区尺寸 130x181；他家缩小
+    const cw = seat === 0 ? TEX.CARD_W : TEX.CARD_W * 0.55;
+    const chh = seat === 0 ? TEX.CARD_H : TEX.CARD_H * 0.55;
+    const maxW = seat === 0 ? 560 : 300;
+    const gap = o.cards.length > 1 ? Math.min(24, Math.max(10, (maxW - cw) / (o.cards.length - 1))) : 0;
     const total = (o.cards.length - 1) * gap;
     o.cards.forEach((card, i) => {
       const spr = this.add.image(p.x - total / 2 + i * gap, p.y, TEX.cardKey(card));
-      spr.setDisplaySize(TEX.CARD_W * scale, TEX.CARD_H * scale);
+      spr.setDisplaySize(cw, chh);
       node.outSprites.push(spr);
     });
-    const txt = this.add.text(p.x, p.y - 48, o.patternName, {
+    const txt = this.add.text(p.x, p.y - chh / 2 - 18, o.patternName, {
       fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '18px',
       color: '#ffe9b0', stroke: '#000000', strokeThickness: 3
     }).setOrigin(0.5);
@@ -328,7 +361,7 @@ export default class GuandanScene extends Phaser.Scene {
       spr.y = HAND_Y;
     } else {
       this.selected.add(idx);
-      spr.y = HAND_Y - 22;
+      spr.y = HAND_Y - HAND_UP;
     }
     this.hintIdx = -1;
     this.showSelTip();
@@ -368,7 +401,7 @@ export default class GuandanScene extends Phaser.Scene {
     hand.forEach((c, i) => {
       if (need[c] > 0) { this.selected.add(i); need[c]--; }
     });
-    this.seatNodes[0].handSprites.forEach((s, i) => { s.y = this.selected.has(i) ? HAND_Y - 22 : HAND_Y; });
+    this.seatNodes[0].handSprites.forEach((s, i) => { s.y = this.selected.has(i) ? HAND_Y - HAND_UP : HAND_Y; });
     this.txtTip.setText(Rule.patternText(this.hintList[this.hintIdx])).setColor('#9fe6bf').setAlpha(1);
     this.updateButtons();
   }
@@ -476,7 +509,6 @@ export default class GuandanScene extends Phaser.Scene {
     if (tributeInfo) lines.push(tributeInfo);
 
     this.level = this.table.levelOf(0);
-    if (this.lastRenderedLevel !== this.level) this.refreshCardTextures();
 
     this.renderAll();
     this.showPanel(res.winnerTeam === 1 ? '胜 利' : '失 败', lines);
