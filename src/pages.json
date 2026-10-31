@@ -1,0 +1,26 @@
+{
+  "easycom": {
+    "autoscan": true,
+    "custom": {}
+  },
+  "pages": [
+    {
+      "name": "guandan",
+      "path": "pages/guandan/guandan",
+      "style": {
+        "navigationBarTitleText": "掼蛋",
+        "navigationStyle": "custom",
+        "pageOrientation": "landscape"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "掼蛋",
+    "navigationBarBackgroundColor": "#0b3a24",
+    "backgroundColor": "#06180f",
+    "app-plus": {
+      "bounce": "none"
+    }
+  }
+}

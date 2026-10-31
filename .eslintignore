@@ -1,0 +1,18 @@
+# eslint 忽略检查
+node_modules
+dist
+*.css
+*.less
+*.scss
+*.jpg
+*.png
+*.gif
+*.svg
+*.html
+*.d.ts
+!.eslintrc.js
+# cx工程自定义
+/build/
+/public/
+/src/libs/
+/src/coms/
