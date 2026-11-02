@@ -46,6 +46,8 @@ IMAGES.push(['p_back', A('cards/big/cardback.png')]);
 IMAGES.push(['p_glow', A('cards/big/glowbox.png')]);
 // UI
 IMAGES.push(
+  ['ui_table', A('ui/table.jpg')],
+  ['ui_table_wood', A('ui/table_wood.jpg')],
   ['ui_play', A('ui/btn_play.png')],
   ['ui_play_down', A('ui/btn_play_down.png')],
   ['ui_hint', A('ui/btn_hint.png')],
@@ -140,8 +142,7 @@ export function buildTableTexture(scene, w, h) {
   tex.refresh();
 }
 
-/** 面板按钮（再玩一局等）：normal / pressed / disabled 三态 */
-export function buildButtonTextures(scene, key, w, h, base, opts) {
+/** 面板按钮（再玩一局等）：normal / pressed / disabled 三态 */export function buildButtonTextures(scene, key, w, h, base, opts) {
   const mk = (suffix, top, bottom, border, txtColor) => {
     const { tex, ctx } = newCanvas(scene, `${key}_${suffix}`, w, h);
     const r = Math.min(h / 2, 14);
@@ -180,6 +181,24 @@ export function buildButtonTextures(scene, key, w, h, base, opts) {
     mk('disabled', '#e8e8e4', '#d4d4cf', '#c0c0bb', '#a8a8a3');
   }
   return { w, h };
+}
+
+/** 牌面投影（圆角黑块 + 边缘柔化），用于出牌区让牌浮起来 */
+export function buildCardShadowTexture(scene, w, h) {
+  const key = 'card_shadow';
+  const old = scene.textures.get(key);
+  if (old && old.key === key) return;
+  const pad = 6;
+  const { tex, ctx } = newCanvas(scene, key, w + pad * 2, h + pad * 2);
+  const g = ctx.createRadialGradient((w + pad * 2) / 2, (h + pad * 2) / 2, 4,
+    (w + pad * 2) / 2, (h + pad * 2) / 2, Math.max(w, h) * 0.62);
+  g.addColorStop(0, 'rgba(0,0,0,0.55)');
+  g.addColorStop(0.7, 'rgba(0,0,0,0.30)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  roundRect(ctx, pad, pad, w, h, 8);
+  ctx.fill();
+  tex.refresh();
 }
 
 /** 头像底板（圆形） */
@@ -221,5 +240,6 @@ export function buildBadgeTexture(scene, key, w, h, color, label) {
 export default {
   SS, CARD_W, CARD_H, BIG_W, BIG_H,
   preloadAssets, cardKey, bigKey, numKey, suitKey,
-  buildTableTexture, buildButtonTextures, buildAvatarTexture, buildBadgeTexture
+  buildTableTexture, buildButtonTextures, buildAvatarTexture, buildBadgeTexture,
+  buildCardShadowTexture
 };
