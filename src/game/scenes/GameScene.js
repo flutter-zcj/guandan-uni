@@ -10,6 +10,7 @@ import GameTable from '../engine/table.js';
 import AI from '../engine/ai.js';
 import TEX from '../textures.js';
 import GdAudio, { preloadAudio } from '../audio.js';
+import Net from '../net.js';
 
 const W = 1280, H = 720;
 
@@ -26,7 +27,7 @@ const SEAT_NAME = ['我', '西家', '北家', '东家'];
 const OUT_POS = [
   { x: 640, y: 350 },
   { x: 288, y: 322 },
-  { x: 640, y: 246 },
+  { x: 640, y: 232 },
   { x: 992, y: 322 }
 ];
 /* 各家出牌区缩放：自己最大，对家/上下家缩小 */
@@ -89,10 +90,129 @@ export default class GuandanScene extends Phaser.Scene {
     this.buildInfo();
     this.buildButtons();
 
+    this.events.once('shutdown', () => { if (this.net) this.net.close(); });
+
     // 音效（原版资源）：背景音乐 + 全部音效语音
     this.audio = new GdAudio(this);
 
-    this.newRound();
+    // 联机模式：URL 带 room 参数时由服务端驱动牌局
+    this.isOnline = !!(window.__GD_ROOM);
+    this.myHand = [];
+    this.seatNames = SEAT_NAME.slice();
+    if (this.isOnline) this.initOnline();
+    else this.newRound();
+  }
+
+  /* ---------------- 联机 ---------------- */
+
+  initOnline() {
+    this.txtRoom.setVisible(true).setText('房间 ' + window.__GD_ROOM);
+    this.btnInvite.setVisible(true);
+    this.btnAgain.setVisible(false);
+
+    this.net = new Net({ room: window.__GD_ROOM, name: window.__GD_NAME || '' });
+    this.net.on('joined', (m) => {
+      this.mySeat = 0;      // 服务端座位在 sync.seats 中按自己视角重排，见 applySync
+      this.audio && this.audio.uiClick();
+      this.toast('已进入房间 ' + m.room, '#9fe6bf');
+    });
+    this.net.on('sync', (m) => this.applySync(m));
+    this.net.on('settle', (m) => this.onRemoteSettle(m));
+    this.net.on('error', (m) => {
+      this.toast(m.msg || '操作失败', '#ff9c8a');
+      if (/已满/.test(m.msg || '')) {
+        setTimeout(() => { if (this.onExit) this.onExit(); }, 1500);
+      }
+    });
+    this.net.on('close', () => this.toast('与服务器断开，正在重连…', '#ff9c8a'));
+    this.net.connect();
+  }
+
+  /** 应用服务端全量状态（自己永远渲染在 0 号位） */
+  applySync(m) {
+    this.remote = m;
+    // 服务端座位 → 本地视角座位：自己映射到 0，其余按相对位置旋转
+    const mySeat = (this.net && this.net.seat >= 0) ? this.net.seat : 0;
+    const map = [(mySeat + 0) % 4, (mySeat + 1) % 4, (mySeat + 2) % 4, (mySeat + 3) % 4];
+    this.viewMap = map;
+
+    const t = this.table;
+    t.step = m.step;
+    // 视角换算：自己所在队 = 本地 team1
+    const mySrv = (this.net && this.net.seat >= 0) ? this.net.seat : 0;
+    const myIdx = mySrv % 2 === 0 ? 0 : 1;
+    t.levelTeam1 = m.levels[myIdx];
+    t.levelTeam2 = m.levels[1 - myIdx];
+    t.lastPlaySeat = m.lastPlaySeat >= 0 ? map.indexOf(m.lastPlaySeat) : -1;
+    t.lastPattern = m.lastPattern
+      ? Rule.parse(m.lastPattern.cards, m.level)
+      : null;
+
+    // 座位：用服务端数据填到本地视角
+    for (let v = 0; v < 4; v++) {
+      const s = m.seats[map[v]];
+      t.seats[v].rank = s ? s.rank : 0;
+      t.seats[v].hand = (v === 0)
+        ? (m.hand || []).slice()
+        : new Array(s ? s.count : 0).fill(0);
+      this.seatNames[v] = s ? (s.name || SEAT_NAME[v]) : SEAT_NAME[v];
+      if (this.seatNodes[v]) this.seatNodes[v].name.setText(this.seatNames[v]);
+    }
+    this.myHand = t.seats[0].hand.slice();
+    this.level = t.levelTeam1;
+
+    // 当前回合座位
+    const curV = m.currentSeat >= 0 ? map.indexOf(m.currentSeat) : -1;
+    t.currentSeat = curV;
+
+    // 各家出牌区
+    this.outShow = [null, null, null, null];
+    (m.outs || []).forEach((o) => {
+      if (!o) return;
+      const v = map.indexOf(o.seat);
+      if (v >= 0) this.outShow[v] = { cards: o.cards, patternName: o.name };
+    });
+
+    // 手牌变化 → 清空选择
+    const sig = this.myHand.join(',');
+    if (sig !== this._handSig) {
+      this._handSig = sig;
+      this.selected.clear();
+      this.hintList = [];
+      this.hintIdx = -1;
+      this.txtTip.setAlpha(0);
+    }
+
+    if (m.status === 'settled') {
+      // 结算面板由 settle 消息驱动
+      this.renderAll();
+      return;
+    }
+    if (this.panel) { this.panel.destroy(); this.panel = null; }
+    this.renderAll();
+  }
+
+  onRemoteSettle(m) {
+    this.settle = m;
+    const lines = [];
+    lines.push(m.winnerTeam === 1 ? '本方胜！' : '对方胜');
+    if (m.doubleDown) lines.push('双下');
+    if (m.upLevel) lines.push('升级 +' + m.upLevel);
+    if (m.resisted) {
+      lines.push('抗贡：双大王，免贡');
+    } else if (m.tributes && m.tributes.length) {
+      lines.push(m.tributes.map((x) =>
+        this.seatNames[x.from] + ' 进贡 ' + x.card + (x.back ? '，' + this.seatNames[x.to] + ' 还 ' + x.back : '')
+      ).join('；'));
+    }
+    lines.push('6 秒后自动开下一局');
+
+    [this.btnPass, this.btnHint, this.btnPlay].forEach((b) => {
+      b.setVisible(false);
+      if (b.shadow) b.shadow.setVisible(false);
+    });
+    this.showPanel(m.winnerTeam === 1 ? '胜 利' : '失 败', lines);
+    if (this.audio) { if (m.winnerTeam === 1) this.audio.win(); else this.audio.lose(); }
   }
 
   buildTextures() {
@@ -137,7 +257,37 @@ export default class GuandanScene extends Phaser.Scene {
       fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '17px', color: '#ffe9b0'
     }).setOrigin(1, 0.5).setDepth(41);
 
+    // 联机：房间号 + 邀请好友
+    this.txtRoom = this.add.text(186, 23, '', {
+      fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '16px', color: '#9fe6bf'
+    }).setOrigin(0, 0.5).setDepth(41).setVisible(false);
+
+    this.btnInvite = this.add.text(300, 23, '＋ 邀请好友', {
+      fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '16px',
+      color: '#06200f', backgroundColor: '#ffd76a', padding: { x: 8, y: 3 }
+    }).setOrigin(0, 0.5).setDepth(41).setVisible(false).setInteractive({ useHandCursor: true });
+    this.btnInvite.on('pointerup', () => this.copyInvite());
+
     this.buildSoundToggle();
+  }
+
+  /** 复制邀请链接（微信里直接发给好友即可进同一房） */
+  copyInvite() {
+    if (this.audio) this.audio.uiClick();
+    const room = window.__GD_ROOM;
+    const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+    const link = base + '?room=' + room + '#/pages/guandan/guandan';
+    const done = () => this.toast('邀请链接已复制，发给好友即可进房', '#9fe6bf');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done).catch(() => this.toast('房间号：' + room, '#ffd76a'));
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = link;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { this.toast('房间号：' + room, '#ffd76a'); }
+      document.body.removeChild(ta);
+    }
   }
 
   /** 音效开关（顶栏右侧圆形喇叭） */
@@ -312,7 +462,7 @@ export default class GuandanScene extends Phaser.Scene {
 
   renderAll() {
     const t = this.table;
-    this.txtRound.setText('第 ' + t.roundNo + ' 局');
+    this.txtRound.setText('第 ' + ((this.isOnline && this.remote) ? this.remote.round : t.roundNo) + ' 局');
     const lv = this.level;
     const wildCard = Rule.levelHeartCard ? Rule.levelHeartCard(lv) : 0;
     this.txtLevelInfo.setText(
@@ -340,7 +490,7 @@ export default class GuandanScene extends Phaser.Scene {
 
     if (t.step === 'play') {
       const mine = t.currentSeat === 0;
-      let txt = mine ? '轮到你了' : SEAT_NAME[t.currentSeat] + ' 出牌中…';
+      let txt = mine ? '轮到你了' : this.seatNames[t.currentSeat] + ' 出牌中…';
       if (t.lastPattern) txt += '\n待压：' + Rule.patternText(t.lastPattern);
       this.txtCenter.setText(txt).setColor(mine ? '#ffd76a' : '#cfe9da');
     } else {
@@ -401,7 +551,7 @@ export default class GuandanScene extends Phaser.Scene {
           spr.setAngle(seat === 1 ? 90 : -90);
         } else {
           const total = (n - 1) * gap;
-          spr = this.add.image(p.x - total / 2 + i * gap, p.y + 96, 'p_back');
+          spr = this.add.image(p.x - total / 2 + i * gap, p.y + 80, 'p_back');
         }
         spr.setDisplaySize(BACK_W, BACK_H);
         node.handSprites.push(spr);
@@ -432,8 +582,11 @@ export default class GuandanScene extends Phaser.Scene {
       spr.setDisplaySize(cw, chh);
       node.outSprites.push(spr);
     });
-    const txt = this.add.text(p.x, p.y - chh / 2 - 16, o.patternName, {
-      fontFamily: '"Microsoft YaHei",sans-serif', fontSize: (seat === 0 ? 19 : 16) + 'px',
+    if (seat === 0) return;   // 自己的牌型文字在左侧状态区显示，出牌区不再叠字
+    let tx = p.x, ty = p.y - chh / 2 - 14;
+    if (seat === 2) { tx = p.x + cw / 2 + 52; ty = p.y; }   // 对家：文字放牌右侧，避开自己的出牌区
+    const txt = this.add.text(tx, ty, o.patternName, {
+      fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '16px',
       color: '#ffe9b0', stroke: '#0a2416', strokeThickness: 4
     }).setOrigin(0.5);
     node.outSprites.push(txt);
@@ -509,6 +662,15 @@ export default class GuandanScene extends Phaser.Scene {
     if (this.table.lastPattern && !Rule.canBeat(p, this.table.lastPattern, this.level)) {
       this.toast('压不过上家'); return;
     }
+
+    if (this.isOnline) {
+      // 联机：交给服务端裁定，本地只做即时反馈
+      if (this.audio) this.audio.playCards(p);
+      this.net.play(cards);
+      this.clearSelection();
+      return;
+    }
+
     if (!this.table.play(0, cards)) { this.toast('出牌失败'); return; }
 
     this.outShow[0] = { cards: cards.slice(), patternName: Rule.patternText(p) };
@@ -522,6 +684,14 @@ export default class GuandanScene extends Phaser.Scene {
   onPass() {
     if (!this.myTurn()) return;
     if (!this.table.lastPattern) { this.toast('你是先手，必须出牌'); return; }
+
+    if (this.isOnline) {
+      if (this.audio) this.audio.pass();
+      this.net.pass();
+      this.clearSelection();
+      return;
+    }
+
     this.table.play(0, []);
     this.outShow[0] = null;
     if (this.audio) this.audio.pass();
@@ -541,6 +711,8 @@ export default class GuandanScene extends Phaser.Scene {
 
   scheduleTurn() {
     const t = this.table;
+    // 联机：回合推进由服务端 sync 驱动
+    if (this.isOnline) { this.updateButtons(); return; }
     if (t.step !== 'play') { this.checkEnd(); return; }
     if (t.currentSeat === 0) { this.updateButtons(); return; }
     this.busy = true;
@@ -549,6 +721,7 @@ export default class GuandanScene extends Phaser.Scene {
   }
 
   aiTurn() {
+    if (this.isOnline) return;
     const t = this.table;
     if (t.step !== 'play') { this.busy = false; this.checkEnd(); return; }
     const seat = t.currentSeat;

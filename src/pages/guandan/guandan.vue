@@ -14,6 +14,7 @@
 
 <script setup>
 import { onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { startGame, destroyGame, setForcedRotation } from '@/game/main.js'
 
 const rotated = ref(false)
@@ -23,6 +24,15 @@ let rafId = 0
 let onResize = null
 let onFsChange = null
 let autoOnce = null
+
+/** 联机参数：?room=123456&name=xxx（同时兼容 hash 前后两种写法） */
+onLoad((opt) => {
+  const q = new URLSearchParams(location.search)
+  const room = (opt && opt.room) || q.get('room') || ''
+  const name = (opt && opt.name) || q.get('name') || ''
+  window.__GD_ROOM = String(room || '')
+  window.__GD_NAME = decodeURIComponent(name || '')
+})
 
 function isPortrait() {
   const w = window.innerWidth

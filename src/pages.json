@@ -5,6 +5,14 @@
   },
   "pages": [
     {
+      "name": "lobby",
+      "path": "pages/lobby/lobby",
+      "style": {
+        "navigationBarTitleText": "掼蛋",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "name": "guandan",
       "path": "pages/guandan/guandan",
       "style": {

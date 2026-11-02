@@ -1,0 +1,19 @@
+{
+  "name": "guandan-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "掼蛋房间联机服务端（Node.js + ws，复用前端 JS 规则引擎）",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "sync:engine": "rm -rf game/engine && cp -r ../src/game/engine game/engine"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
