@@ -11,6 +11,7 @@ import AI from '../engine/ai.js';
 import TEX from '../textures.js';
 import GdAudio, { preloadAudio } from '../audio.js';
 import Net from '../net.js';
+import WaitRoom from '../ui/WaitRoom.js';
 
 const W = 1280, H = 720;
 
@@ -44,6 +45,10 @@ const BACK_W = 42, BACK_H = 57;
 /* 操作按钮：贴右下角、手牌上方，避免遮挡手牌（原版按钮 273x97 等比缩小） */
 const BTN_W = 168, BTN_H = 60, BTN_Y = 470;
 const BTN_X = { pass: 806, hint: 986, play: 1166 };
+
+/* 手牌命中区：只看 y 与 x（按间距反算索引），比逐张 hitTest 更准、也支持滑动连选 */
+const HAND_HIT_TOP = 508;
+const HAND_HIT_BOTTOM = H - 2;
 
 export default class GuandanScene extends Phaser.Scene {
   constructor() {
@@ -89,6 +94,16 @@ export default class GuandanScene extends Phaser.Scene {
     this.buildSeats();
     this.buildInfo();
     this.buildButtons();
+    this.buildHandInput();
+
+    // 房间等待层（联机未开局时显示）
+    this.waitRoom = new WaitRoom(this, {
+      onCopy: () => this.copyInvite(),
+      onAddBot: () => { if (this.audio) this.audio.uiClick(); this.net.addBot(); },
+      onRemoveBot: (seat) => { if (this.audio) this.audio.uiClick(); this.net.removeBot(seat); },
+      onStart: () => { if (this.audio) this.audio.uiClick(); this.net.start(); },
+      onExit: () => { if (this.audio) this.audio.uiClick(); if (this.onExit) this.onExit(); }
+    });
 
     this.events.once('shutdown', () => { if (this.net) this.net.close(); });
 
@@ -110,9 +125,15 @@ export default class GuandanScene extends Phaser.Scene {
     this.btnInvite.setVisible(true);
     this.btnAgain.setVisible(false);
 
-    this.net = new Net({ room: window.__GD_ROOM, name: window.__GD_NAME || '' });
+    this.net = new Net({
+      room: window.__GD_ROOM,
+      name: window.__GD_NAME || '',
+      create: !!window.__GD_CREATE
+    });
     this.net.on('joined', (m) => {
       this.mySeat = 0;      // 服务端座位在 sync.seats 中按自己视角重排，见 applySync
+      window.__GD_ROOM = m.room;
+      this.txtRoom.setText('房间 ' + m.room);
       this.audio && this.audio.uiClick();
       this.toast('已进入房间 ' + m.room, '#9fe6bf');
     });
@@ -183,13 +204,72 @@ export default class GuandanScene extends Phaser.Scene {
       this.txtTip.setAlpha(0);
     }
 
+    if (m.status === 'waiting') {
+      // 房间等待中：清掉上一局残留状态，显示等待层
+      this.settle = null;
+      this.busy = false;
+      this.selected.clear();
+      this.hintList = [];
+      this.hintIdx = -1;
+      this.txtTip.setAlpha(0);
+      this.enterWaiting(m);
+      return;
+    }
+
+    // 关键：进入 playing 必须清掉上一局的结算标记，
+    // 否则 updateButtons 会一直判定「已结算」而隐藏三个操作按钮（第二局按钮消失的根因）
+    this.settle = null;
+    if (this.waitRoom && this.waitRoom.visible) this.waitRoom.hide();
+
     if (m.status === 'settled') {
-      // 结算面板由 settle 消息驱动
+      // 结算面板由 settle 消息驱动；若是重连后收到，补一个面板
       this.renderAll();
+      if (!this.panel && m.ranks) this.rebuildSettlePanel(m);
       return;
     }
     if (this.panel) { this.panel.destroy(); this.panel = null; }
     this.renderAll();
+  }
+
+  /** 房间等待态渲染 */
+  enterWaiting(m) {
+    const mySrv = (this.net && this.net.seat >= 0) ? this.net.seat : 0;
+    const map = this.viewMap || [0, 1, 2, 3];
+    const seats = [0, 1, 2, 3].map((v) => {
+      const srv = map[v];
+      const s = m.seats[srv] || {};
+      return {
+        seat: srv,
+        name: s.name || '',
+        empty: !!s.empty,
+        bot: !!s.bot,
+        host: !!s.host,
+        online: !!s.online
+      };
+    });
+    this.txtRound.setText('等待开局');
+    this.txtLevelInfo.setText('');
+    this.txtCenter.setText('');
+    this.txtRoom.setText('房间 ' + m.room);
+    if (this.waitRoom) {
+      this.waitRoom.show({
+        room: m.room,
+        seats,
+        isHost: !!(m.seats[mySrv] && m.seats[mySrv].host)
+      });
+    }
+    this.updateButtons();
+  }
+
+  /** 重连后补结算面板（只显示名次，不重播音效） */
+  rebuildSettlePanel(m) {
+    this.settle = m;
+    const lines = [];
+    lines.push(m.winnerTeam === 1 ? '本方胜！' : '对方胜');
+    if (m.doubleDown) lines.push('双下');
+    if (m.upLevel) lines.push('升级 +' + m.upLevel);
+    lines.push('6 秒后自动开下一局');
+    this.showPanel(m.winnerTeam === 1 ? '胜 利' : '失 败', lines);
   }
 
   onRemoteSettle(m) {
@@ -262,7 +342,7 @@ export default class GuandanScene extends Phaser.Scene {
       fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '16px', color: '#9fe6bf'
     }).setOrigin(0, 0.5).setDepth(41).setVisible(false);
 
-    this.btnInvite = this.add.text(300, 23, '＋ 邀请好友', {
+    this.btnInvite = this.add.text(336, 23, '＋ 邀请好友', {
       fontFamily: '"Microsoft YaHei",sans-serif', fontSize: '16px',
       color: '#06200f', backgroundColor: '#ffd76a', padding: { x: 8, y: 3 }
     }).setOrigin(0, 0.5).setDepth(41).setVisible(false).setInteractive({ useHandCursor: true });
@@ -435,6 +515,78 @@ export default class GuandanScene extends Phaser.Scene {
     this.btnAgain = again;
   }
 
+  /* ---------------- 手牌输入（点选 + 滑动连选） ---------------- */
+
+  /**
+   * 不再依赖每张牌的 hitTest 矩形：牌的间距只有 42px、牌宽 142px，
+   * 互相重叠时 Phaser 只会命中深度最高的那张，导致「点不准」。
+   * 这里改为在手牌带状区域按 x 坐标反算牌索引，并支持按住拖动连续划选。
+   */
+  buildHandInput() {
+    this._dragMode = null;    // true = 正在「选中」，false = 正在「取消」
+    this._dragSeen = null;
+
+    const end = () => { this._dragMode = null; this._dragSeen = null; };
+    this.input.on('pointerdown', (p) => this.onHandDown(p));
+    this.input.on('pointermove', (p) => this.onHandMove(p));
+    this.input.on('pointerup', end);
+    this.input.on('pointerupoutside', end);
+    this.input.on('gameout', end);
+  }
+
+  /** 屏幕坐标 → 手牌索引；不在手牌区域返回 -1 */
+  cardIndexAt(px, py) {
+    const L = this._handLayout;
+    if (!L || !L.n) return -1;
+    if (py < HAND_HIT_TOP || py > HAND_HIT_BOTTOM) return -1;
+    const leftEdge = L.startX - TEX.BIG_W / 2;
+    const rightEdge = leftEdge + (L.n - 1) * L.gap + TEX.BIG_W;
+    if (px < leftEdge - 6 || px > rightEdge + 6) return -1;
+    if (L.n <= 1 || !L.gap) return 0;
+    // 每张牌只露出左侧 gap 宽的条带（右侧被下一张压住），按条带反算索引
+    let i = Math.floor((px - leftEdge) / L.gap);
+    if (i < 0) i = 0;
+    if (i > L.n - 1) i = L.n - 1;
+    return i;
+  }
+
+  onHandDown(p) {
+    if (!this.myTurn()) { this._dragMode = null; return; }
+    const i = this.cardIndexAt(p.x, p.y);
+    if (i < 0) { this._dragMode = null; return; }
+    // 按下时决定本次拖动的方向：反选 / 正选
+    this._dragMode = !this.selected.has(i);
+    this._dragSeen = new Set([i]);
+    this.setCard(i, this._dragMode, true);
+  }
+
+  onHandMove(p) {
+    if (this._dragMode === null || !p.isDown) return;
+    const i = this.cardIndexAt(p.x, p.y);
+    if (i < 0 || this._dragSeen.has(i)) return;
+    this._dragSeen.add(i);
+    this.setCard(i, this._dragMode, true);
+  }
+
+  /** 设置某张牌的选中态；sound=true 时播放点牌音效 */
+  setCard(idx, on, sound) {
+    const spr = this.seatNodes[0].handSprites[idx];
+    if (!spr) return;
+    const has = this.selected.has(idx);
+    if (on === has) return;
+    if (on) this.selected.add(idx); else this.selected.delete(idx);
+    spr.y = on ? HAND_Y - HAND_UP : HAND_Y;
+    if (sound && this.audio) this.audio.cardSelect();
+    this.afterSelect();
+  }
+
+  /** 选择变化后刷新牌型提示与按钮态 */
+  afterSelect() {
+    this.hintIdx = -1;
+    this.showSelTip();
+    this.updateButtons();
+  }
+
   /* ---------------- 一局开始 ---------------- */
 
   newRound() {
@@ -513,8 +665,9 @@ export default class GuandanScene extends Phaser.Scene {
       const avail = W - 60;
       let gap = n > 1 ? Math.min(HAND_GAP_MAX, (avail - cw) / (n - 1)) : 0;
       if (gap < HAND_GAP_MIN) gap = HAND_GAP_MIN;
-      const total = cw + gap * (n - 1);
-      const startX = 640 - total / 2 + cw / 2;
+      const total = n > 0 ? cw + gap * (n - 1) : 0;
+      const startX = n > 0 ? 640 - total / 2 + cw / 2 : 640;
+      this._handLayout = { startX, gap, n };   // 供 cardIndexAt 反算命中
       hand.forEach((card, i) => {
         const cont = this.add.container(startX + i * gap, HAND_Y);
         cont.setDepth(10 + i);
@@ -533,8 +686,7 @@ export default class GuandanScene extends Phaser.Scene {
         }
         if (card === wildCard) cont.add(this.add.image(0, 0, 'p_glow'));  // 逢人配金框
         if (this.selected.has(i)) cont.y = HAND_Y - HAND_UP;
-        base.setInteractive({ useHandCursor: true });
-        base.on('pointerup', () => this.toggleCard(i));
+        base.setInteractive({ useHandCursor: true });   // 只保留手型，点击统一走手牌带
         cont.cardIndex = i;
         node.handSprites.push(cont);
       });
@@ -600,18 +752,7 @@ export default class GuandanScene extends Phaser.Scene {
 
   toggleCard(idx) {
     if (!this.myTurn()) return;
-    const spr = this.seatNodes[0].handSprites[idx];
-    if (this.selected.has(idx)) {
-      this.selected.delete(idx);
-      spr.y = HAND_Y;
-    } else {
-      this.selected.add(idx);
-      spr.y = HAND_Y - HAND_UP;
-    }
-    if (this.audio) this.audio.cardSelect();
-    this.hintIdx = -1;
-    this.showSelTip();
-    this.updateButtons();
+    this.setCard(idx, !this.selected.has(idx), true);
   }
 
   showSelTip() {
@@ -843,6 +984,14 @@ export default class GuandanScene extends Phaser.Scene {
   updateButtons() {
     const t = this.table;
     const turn = this.myTurn();
+    // 只有「牌局进行中且未结算」才显示三个操作按钮；
+    // 结算面板、等待房间时统一隐藏（避免再来一局后按钮不见/残留）
+    const showOps = t.step === 'play' && !this.settle && !(this.waitRoom && this.waitRoom.visible);
+    [this.btnPass, this.btnHint, this.btnPlay].forEach((b) => {
+      b.setVisible(showOps);
+      if (b.shadow) b.shadow.setVisible(showOps && b.enabled !== false);
+    });
+
     let canPlay = false;
     if (turn && this.selected.size > 0) {
       const hand = t.seats[0].hand;

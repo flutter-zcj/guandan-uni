@@ -19,6 +19,7 @@ export default class Net {
   constructor(opts) {
     this.room = String(opts.room || '');
     this.name = String(opts.name || '');
+    this.create = !!opts.create;      // true = 房间不存在时新建（创建房间）
     this.url = opts.url || (typeof window !== 'undefined' && window.__GD_WS) || buildUrl();
     this.ws = null;
     this.handlers = {};
@@ -53,7 +54,7 @@ export default class Net {
       this.connected = true;
       this._retry = 0;
       this.emit('open', {});
-      this.send({ t: 'join', room: this.room, name: this.name });
+      this.send({ t: 'join', room: this.room, name: this.name, create: this.create });
       clearInterval(this._hb);
       this._hb = setInterval(() => this.send({ t: 'ping' }), 25000);
     };
@@ -88,6 +89,8 @@ export default class Net {
   play(cards) { return this.send({ t: 'play', cards }); }
   pass() { return this.send({ t: 'pass' }); }
   start() { return this.send({ t: 'start' }); }
+  addBot() { return this.send({ t: 'addBot' }); }
+  removeBot(seat) { return this.send({ t: 'removeBot', seat }); }
   leave() { return this.send({ t: 'leave' }); }
 
   close() {

@@ -67,22 +67,24 @@ function genRoom() {
   return String(100000 + Math.floor(Math.random() * 900000))
 }
 
-function enterRoom(id) {
+function enterRoom(id, create) {
   const name = (nick.value || '').trim() || ('玩家' + Math.floor(Math.random() * 9000 + 1000))
   try { uni.setStorageSync('gd_nick', name) } catch (e) { /* ignore */ }
   uni.navigateTo({
-    url: '/pages/guandan/guandan?room=' + id + '&name=' + encodeURIComponent(name)
+    url: '/pages/guandan/guandan?room=' + id + '&name=' + encodeURIComponent(name) +
+      (create ? '&create=1' : '')
   })
 }
 
 function joinOrCreate() {
   let id = String(room.value || '').trim()
-  if (!id) id = genRoom()
+  const create = !id
+  if (create) id = genRoom()
   if (!/^\d{4,6}$/.test(id)) {
     uni.showToast({ title: '房间号需 4-6 位数字', icon: 'none' })
     return
   }
-  enterRoom(id)
+  enterRoom(id, create)
 }
 
 function playSolo() {

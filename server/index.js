@@ -73,10 +73,25 @@ wss.on('connection', (ws) => {
     const seat = ws.seat;
 
     switch (msg.t) {
-      case 'start':
+      case 'start': {
         if (room.status === 'playing') return safeSend(ws, { t: 'error', msg: '牌局进行中' });
-        room.start();
+        if (!room.isHost(seat)) return safeSend(ws, { t: 'error', msg: '只有房主可以开始游戏' });
+        const r = room.start();
+        if (!r.ok) safeSend(ws, { t: 'error', msg: r.msg });
         break;
+      }
+      case 'addBot': {
+        if (!room.isHost(seat)) return safeSend(ws, { t: 'error', msg: '只有房主可以添加电脑' });
+        const r = room.addBot();
+        if (!r.ok) safeSend(ws, { t: 'error', msg: r.msg });
+        break;
+      }
+      case 'removeBot': {
+        if (!room.isHost(seat)) return safeSend(ws, { t: 'error', msg: '只有房主可以移除电脑' });
+        const r = room.removeBot(Number(msg.seat));
+        if (!r.ok) safeSend(ws, { t: 'error', msg: r.msg });
+        break;
+      }
       case 'play': {
         const cards = Array.isArray(msg.cards) ? msg.cards.filter((c) => Number.isInteger(c)) : [];
         const r = room.playerPlay(seat, cards);
@@ -123,16 +138,37 @@ function safeSend(ws, msg) {
 
 function handleJoin(ws, msg) {
   if (ws.room) return safeSend(ws, { t: 'error', msg: '已在房间中' });
+
+  const name = String(msg.name || '').slice(0, 12);
+  const create = !!msg.create;
   let id = String(msg.room || '').trim();
-  if (!/^\d{4,6}$/.test(id)) id = newRoomId();
+  if (!/^\d{4,6}$/.test(id)) {
+    if (!create) return safeSend(ws, { t: 'error', msg: '房间号需 4-6 位数字' });
+    id = newRoomId();
+  }
 
   let room = rooms.get(id);
+  if (create && room) {
+    // 房号已被占用：另开一个新房间，避免误入别人的牌局
+    let nid = newRoomId();
+    while (rooms.has(nid)) nid = newRoomId();
+    id = nid;
+    room = null;
+  }
   if (!room) {
+    // 输错房号不再"顺手建房"，避免进到空房间还以为进了朋友的房
+    if (!create) return safeSend(ws, { t: 'error', msg: '房间 ' + id + ' 不存在' });
     if (rooms.size >= MAX_ROOMS) return safeSend(ws, { t: 'error', msg: '服务器房间已满' });
     room = new Room(id);
     rooms.set(id, room);
   }
-  const seat = room.join(ws, String(msg.name || '').slice(0, 12));
+
+  const isReconnect = room.players.some((p) => p && !p.bot && p.name === name);
+  if (room.status === 'playing' && !isReconnect) {
+    return safeSend(ws, { t: 'error', msg: '牌局已开始，请等本局结束再进' });
+  }
+
+  const seat = room.join(ws, name);
   if (seat < 0) return safeSend(ws, { t: 'error', msg: '房间已满（4 人）' });
 
   ws.room = room;
@@ -140,10 +176,10 @@ function handleJoin(ws, msg) {
   safeSend(ws, { t: 'joined', room: id, seat, name: room.players[seat].name });
   room.syncAll();
 
-  // 满员立即开局；否则 5 秒后补机器人开局
-  if (room.isFull() && room.status === 'waiting') {
+  // 4 个真人坐满才自动开局；人不满时留在房间，由房主添加电脑或等待好友
+  if (room.humanCount() === 4 && room.status === 'waiting') {
     setTimeout(() => {
-      if (room.status === 'waiting' && room.isFull()) room.start();
+      if (room.status === 'waiting' && room.humanCount() === 4) room.start();
     }, 800);
   }
 }

@@ -25,13 +25,15 @@ let onResize = null
 let onFsChange = null
 let autoOnce = null
 
-/** 联机参数：?room=123456&name=xxx（同时兼容 hash 前后两种写法） */
+/** 联机参数：?room=123456&name=xxx&create=1（同时兼容 hash 前后两种写法） */
 onLoad((opt) => {
   const q = new URLSearchParams(location.search)
   const room = (opt && opt.room) || q.get('room') || ''
   const name = (opt && opt.name) || q.get('name') || ''
+  const create = (opt && opt.create) || q.get('create') || ''
   window.__GD_ROOM = String(room || '')
   window.__GD_NAME = decodeURIComponent(name || '')
+  window.__GD_CREATE = create === '1' || create === 'true'
 })
 
 function isPortrait() {
