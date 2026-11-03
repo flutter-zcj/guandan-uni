@@ -25,15 +25,18 @@ let onResize = null
 let onFsChange = null
 let autoOnce = null
 
-/** 联机参数：?room=123456&name=xxx&create=1（同时兼容 hash 前后两种写法） */
+/** 联机参数：?room=123456&name=xxx&create=1&ws=ws://host/ws（同时兼容 hash 前后两种写法） */
 onLoad((opt) => {
   const q = new URLSearchParams(location.search)
   const room = (opt && opt.room) || q.get('room') || ''
   const name = (opt && opt.name) || q.get('name') || ''
   const create = (opt && opt.create) || q.get('create') || ''
+  const ws = (opt && opt.ws) || q.get('ws') || ''
   window.__GD_ROOM = String(room || '')
   window.__GD_NAME = decodeURIComponent(name || '')
   window.__GD_CREATE = create === '1' || create === 'true'
+  // 允许显式指定后端地址（本地联调 / 前后端分开部署时使用）
+  if (ws) window.__GD_WS = decodeURIComponent(ws)
 })
 
 function isPortrait() {

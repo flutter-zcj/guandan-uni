@@ -111,7 +111,8 @@ export default class GuandanScene extends Phaser.Scene {
     this.audio = new GdAudio(this);
 
     // 联机模式：URL 带 room 参数时由服务端驱动牌局
-    this.isOnline = !!(window.__GD_ROOM);
+    // 有房号 = 进房；create=1 = 房号由服务端分配，两者都走联机
+    this.isOnline = !!(window.__GD_ROOM || window.__GD_CREATE);
     this.myHand = [];
     this.seatNames = SEAT_NAME.slice();
     if (this.isOnline) this.initOnline();

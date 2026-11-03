@@ -37,7 +37,8 @@ src/
 │   ├── textures.js        程序化纹理（牌面/桌面/按钮）
 │   └── main.js            Phaser 启动器
 ├── static/game/           原版美术与音频资源
-server/                    联机服务端（Node.js + ws，复用同一套规则引擎）
+server-go/                 联机服务端（Go + cherry，规则引擎 Go 移植版）★当前使用
+server/                    旧版联机服务端（Node.js + ws，已下线保留作参考）
 ├── pages/guandan/guandan.vue  页面（挂载 Phaser + 横竖屏适配）
 └── pages.json / manifest.json / vite.config.ts
 ```
@@ -54,8 +55,9 @@ npm run build:h5      # 产物 dist/build/h5（纯静态，可直接部署）
 
 - 规则引擎：60 项单测 + 200 局全 AI 对局模拟（0 错误，见 `guandan-game` 仓库）
 - 端到端：Playwright 真浏览器跑完整 3 局到结算（升级/进贡链路），0 JS 错误，截图见 `docs/verify/`
-- 联机：双浏览器同房（A 建房、B 输房号进房）→ 加电脑 → 开局 → 打完整局 → 第二局按钮正常；
-  手牌按住滑动一次连选 5 张，截图 `v5-waitroom.png` / `v5-host-2p.png` / `v5-round2.png`
+- 联机（Go 服务端）：双客户端同房（A 建房、B 输房号进房）→ 加电脑 → 开局 → 断线重连回原座位
+- 规则对拍：Go 引擎与 JS 引擎 4000 组牌型 + 400 组提示 + 8 seed × 3 局整局，结果逐字段一致
+- 线上：建房 → 打两局，0 JS 错误、0 失败请求，截图 `docs/verify/v6-*.png`
 - 强制横屏：竖屏自动旋转铺满 + 触摸坐标命中校验（点击末张手牌精确选中），横屏/桌面回归通过
 
 ## 音效
@@ -79,12 +81,14 @@ npm run build:h5      # 产物 dist/build/h5（纯静态，可直接部署）
 
 ## 联机对战
 
-**当前实现**：房间号联机（Node.js + WebSocket，服务端权威），详见 [docs/03-联机与微信接入方案.md](docs/03-联机与微信接入方案.md)。
+**当前实现**：Go + [cherry](https://github.com/cherry-game/cherry) 的 Actor 服务端，
+详见 [docs/04-服务端迁移到Go+cherry.md](docs/04-服务端迁移到Go+cherry.md)。
 
 ```bash
-cd server
-npm install
-node index.js            # 默认端口 8082，可用 PORT=9102 覆盖
+cd server-go
+go build -o guandan-server .          # 需要 Go 1.24+
+./guandan-server -profile etc/profile/dev.json
+# WS: ws://127.0.0.1:9102/    运维: http://127.0.0.1:9103/health
 ```
 
 - 入口：`https://<host>/guandan/`（大厅）→ **创建房间**（生成 6 位房号）或 **输入房号进入**
@@ -93,6 +97,15 @@ node index.js            # 默认端口 8082，可用 PORT=9102 覆盖
 - 断线 60 秒内可重连（刷新页面也能回到原座位），局中离线自动托管
 - 服务端权威洗牌/发牌/校验，客户端无法作弊
 - 一局结束 6 秒后自动开下一局，掉线真人清位、房主加的电脑保留
+- 战绩落 MySQL（`gd_round` / `gd_player`），DB 不可用时自动降级为内存模式
+
+**通信协议**：cherry simple 协议 `mid(4B) + len(4B) + JSON`，JSON 字段与旧版完全一致；
+前端编解码集中在 `src/game/net.js`，业务层无感知。
+
+| 方向 | mid |
+|---|---|
+| C→S | 1 join · 2 start · 3 addBot · 4 removeBot · 5 play · 6 pass · 7 leave · 8 ping · 9 ready |
+| S→C | 100 joined · 101 sync · 102 settle · 103 error · 104 pong · 105 hello · 106 left |
 
 ## 资源说明
 
