@@ -210,9 +210,20 @@ GRANT ALL PRIVILEGES ON guandan.* TO 'guandan'@'%';
 | 双客户端 | A 建房 / B 输房号进房 / 非房主被拒 / 断线重连回原座位 |
 | 前端 E2E（本地） | 0 JS 错误，第二局三个按钮可见 |
 | 线上 E2E | `https://<host>/guandan/` 建房 → 打两局，0 JS 错误、0 失败请求 |
-| MySQL | 落库 `gd_round` / `gd_player` 正确，中文正常 |
+| MySQL（本地） | MariaDB 10.11 落库 `gd_round` / `gd_player` 正确，中文正常 |
+| MySQL（线上） | MySQL 8.0.46 落库正确，`/top` 排行榜可查，异步写队列 0 失败 |
 
 截图见 `docs/verify/v6-*.png`。
+
+线上现状：
+
+| 项 | 值 |
+|---|---|
+| 进程 | `systemd guandan-go.service`（旧 `guandan-ws` 已 disable，代码备份在 `/www/wwwroot/guandan-server-*`） |
+| 程序目录 | `/www/wwwroot/guandan-server-go`（二进制 + `etc/profile/prod.json`） |
+| DB 连接串 | `/www/wwwroot/guandan-server-go/etc/mysql.env`（600 权限，不进仓库） |
+| 日志 | `/root/zbcx/logs/guandan-go.log`（`journalctl -u guandan-go` 亦可） |
+| 端口 | WS 9102（经 Nginx `/guandan/ws` 反代）· HTTP 9103（仅本机） |
 
 ## 九、后续扩展点
 
